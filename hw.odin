@@ -5,13 +5,10 @@ import gl "vendor:OpenGL"
 import "vendor:glfw"
 import libc "core:c/libc"
 
-hello_triangle_program: u32 = 0;
-
 main :: proc() {
-    fmt.println("[INFO]:\t\tStarting", "app...", sep = " ");
+    fmt.println("[INFO]:\t\tStarting app...");
 
     minor, major, rev : i32;
-
     major, minor, rev = glfw.GetVersion();
     fmt.printfln("[INFO]:\t\tGLFW version (%d,%d,%d)", major, minor, rev);
 
@@ -22,6 +19,7 @@ main :: proc() {
     glfw.WindowHint_int(glfw.REFRESH_RATE, glfw.DONT_CARE);
     window := glfw.CreateWindow(640, 480, title = "Hello World", monitor = nil, share = nil);
     glfw.MakeContextCurrent(window);
+    glfw.SetFramebufferSizeCallback(window, glfw_framebuffer_callback);
     glfw.SwapInterval(1);
 
     defer {
@@ -38,7 +36,7 @@ main :: proc() {
     for !glfw.WindowShouldClose(window) {
         glfw.PollEvents();
         gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
+        gl.DrawArrays(gl.TRIANGLES, 0, 3);  // Draw three sets of vertices.
         glfw.SwapBuffers(window);
     }
 }
@@ -46,66 +44,65 @@ main :: proc() {
 error_handler_GLFW :: proc "c" (error_code: i32, description: cstring) {
     libc.printf("[ERROR]:\tGLFW error: %s [%d]\n", description, error_code);
     libc.printf("[INFO]:\t\tDestroying GLFW instance...\n");
+    libc.fflush(libc.stdout);  // Force a flush, since without it, the messages don't print on time
     window := glfw.GetCurrentContext();
     glfw.DestroyWindow(window);
     glfw.Terminate();
     libc.exit(libc.EXIT_FAILURE);
 }
 
-error_handler_GL :: proc "c" (error_code: u32, type: u32, id: u32, severity: u32, length: i32,
-    error_message: cstring, user_param: rawptr) {
-    severity_str : cstring = "Fatal (Unknown)";
-    switch (severity) {
-        case gl.DEBUG_SEVERITY_HIGH: severity_str = "Fatal (High)";
-        case gl.DEBUG_SEVERITY_MEDIUM: severity_str = "Fatal (Medium)";
-        case gl.DEBUG_SEVERITY_LOW: severity_str = "Warn (low)";
-        case gl.DEBUG_SEVERITY_NOTIFICATION: severity_str = "Warn (info)";
-        case: severity_str = "Fatal (Unknown)";
-    }
-
-    libc.printf("[ERROR]:\t[%s] OpenGL error: %s [%d]\n", severity_str, error_message, error_code);
+glfw_framebuffer_callback :: proc "c" (window: glfw.WindowHandle, width: i32, height: i32) {
+    libc.printf("[INFO]:\t\tFramebuffer resized: (%d,%d)\n", width, height);
+    libc.fflush(libc.stdout);
+    gl.Viewport(0, 0, width, height);  // Refresh framebuffer viewport
 }
 
 init_GL :: proc (window: ^glfw.WindowHandle) -> bool {
-    glfw.WindowHint_int(glfw.CONTEXT_VERSION_MAJOR, 4);
-    glfw.WindowHint_int(glfw.CONTEXT_VERSION_MINOR, 6);
+    // Use 3.3 core driver since we are doing a very basic pipeline setup.
+    glfw.WindowHint_int(glfw.CONTEXT_VERSION_MAJOR, 3);
+    glfw.WindowHint_int(glfw.CONTEXT_VERSION_MINOR, 3);
     glfw.WindowHint_int(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE);
     glfw.WindowHint_bool(glfw.OPENGL_DEBUG_CONTEXT, true);
 
-    gl.load_up_to(4, 6, glfw.gl_set_proc_address);
-    fmt.println("[INFO]:\t\tLoaded OpenGL function functions up to 4.6");
-
-    gl.Enable(gl.DEBUG_OUTPUT);  // Enable debug output.
-    gl.Enable(gl.DEBUG_OUTPUT_SYNCHRONOUS);  // Call the callback as soon as there's an error.
-    gl.DebugMessageCallback(error_handler_GL, nil);
-    // Filter the messages we want to debug or not with the last param 'enabled'.
-    gl.DebugMessageControl(gl.DONT_CARE, gl.DEBUG_TYPE_OTHER, gl.DONT_CARE, 0, nil, gl.FALSE);
+    gl.load_up_to(3, 3, glfw.gl_set_proc_address);
+    fmt.println("[INFO]:\t\tBinded OpenGL function addresses up to 3.3");
 
     gl.Enable(gl.DEPTH_TEST);
     gl.Enable(gl.BLEND);
+    gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     gl.ClearColor(0.18, 0.18, 0.18, 1.0);
     gl.Viewport(0, 0, glfw.GetWindowSize(window^));
 
     program_id, is_ok := gl.load_shaders_file("shaders/hello_triangle.vert", "shaders/hello_triangle.frag");
-    hello_triangle_program = program_id;
+
+    if !is_ok {
+        return false;
+    }
+
+    hello_triangle_program : u32 = program_id;
+    fmt.printfln("[INFO]:\t\tGL program ID: %d", hello_triangle_program);
+    gl.UseProgram(hello_triangle_program);  // Load shader program here since, we only have one
+
+    vao, vbo : u32;
+    // Hardcode vertices for triangle since this is a demo anyway.
+    vertices: [9]f32 = {
+       -0.5, -0.5,  0.0,
+        0.5, -0.5,  0.0,
+        0.0,  0.5,  0.0,
+    };
+
+    gl.GenVertexArrays(1, &vao);
+    gl.GenBuffers(1, &vbo);
+
+    gl.BindVertexArray(vao);
+    gl.BindBuffer(gl.ARRAY_BUFFER, vbo);
+    // Should be STATIC_DRAW, but choosing dynamic to silence OpenGL driver warnings.
+    gl.BufferData(gl.ARRAY_BUFFER, size_of(vertices), &vertices, gl.DYNAMIC_DRAW);
+
+    // Setup vao binding for vertex position.
+    gl.EnableVertexAttribArray(0);  // layout location = 0
+    gl.VertexAttribPointer(0, 3, gl.FLOAT, gl.FALSE, 0, cast(uintptr) 0);  // vin_position
 
     return is_ok;
-}
-
-init_vulkan :: proc() -> bool {
-    glfw.WindowHint_int(glfw.CLIENT_API, glfw.NO_API);
-
-    if !glfw.VulkanSupported() {
-        // VulkanSDK not supported...
-        fmt.println("[ERROR]:\tCannot init Vulkan: Vulkan not supported");
-        return false;
-    }
-
-    if !cast(bool) glfw.ExtensionSupported("GL_ARB_gl_spirv") {
-        // Cannot compile SPIR_V for Vulkan...
-        fmt.println("[ERROR]:\tCannot init Vulkan: SPIRV extension not supported");
-        return false;
-    }
-    return true;
 }
